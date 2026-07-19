@@ -101,8 +101,14 @@ class VirtualSafetyDaemon:
     # ---------- smoother + physics (50Hz, replaces MotionSmoother) ----------
 
     def _physics_loop(self):
-        period = 1.0 / SMOOTHER_HZ
-        dt = period * self.time_scale
+        # Under time_scale > 1 we do NOT coarsen the integration step -
+        # that would wreck collision detection. Instead we keep the sim
+        # timestep fixed (SMOOTHER_HZ ticks per SIM-second, identical to
+        # 1x) and tick faster in real time, so physics fidelity and the
+        # smoother ramp are unchanged; only wall-clock cadence compresses.
+        period = 1.0 / SMOOTHER_HZ           # sim-seconds advanced per tick
+        real_period = period / self.time_scale   # wall time between ticks
+        dt = period
         while self._running:
             with self.lock:
                 if self.target_speed * self.current_speed < 0:
@@ -120,7 +126,7 @@ class VirtualSafetyDaemon:
                     self.current_angle = max(self.current_angle - ANGLE_STEP,
                                              self.target_angle)
                 self.world.step(self.current_speed, self.current_angle, dt)
-            time.sleep(period)
+            time.sleep(real_period)
 
     def _emergency_stop(self):
         # Caller holds no lock; mirrors motion.emergency_stop().

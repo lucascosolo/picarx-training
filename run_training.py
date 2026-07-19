@@ -17,6 +17,10 @@ Examples:
   # baseline without the coach (canned evasion only), for comparison
   python3 run_training.py scenarios/box_corner.json --no-coach
 
+  # 3x faster than real time, bulk-training a whole suite quietly
+  python3 run_training.py scenarios/*.json --speedf 3 --quiet \
+      --policy-dir training_data
+
   # reproducible run with more modules
   python3 run_training.py scenarios/corridor.json --seed 7 \
       --modules arbiter,field_agent,event_logger,coach,explorer
@@ -62,7 +66,15 @@ def main():
                          "(default: live decision/veto/coach trace + heartbeat)")
     ap.add_argument("--progress-interval", type=float, default=5.0,
                     help="seconds between status heartbeat lines (default: 5)")
+    ap.add_argument("--speedf", type=float, default=1.0, metavar="N",
+                    help="run faster than real time by factor N (e.g. 2 = 2x). "
+                         "Dilates the whole system's clock in lockstep so "
+                         "behavior stays faithful; 2-6x is safe, higher starts "
+                         "to starve the modules of CPU. Combine with --quiet "
+                         "and parallel invocations for bulk training.")
     args = ap.parse_args()
+    if args.speedf < 1.0:
+        ap.error("--speedf must be >= 1.0")
 
     modules = [m.strip() for m in args.modules.split(",") if m.strip()]
     if args.coach is True and "coach" not in modules:
@@ -70,7 +82,8 @@ def main():
     elif args.coach is False:
         modules = [m for m in modules if m != "coach"]
     print(f"modules: {', '.join(modules)}"
-          + ("" if "coach" in modules else "   (coach disabled)"))
+          + ("" if "coach" in modules else "   (coach disabled)")
+          + (f"   [{args.speedf:g}x speed]" if args.speedf != 1.0 else ""))
 
     results = []
     for path in args.scenarios:
@@ -82,7 +95,8 @@ def main():
         summary = run_scenario(scenario, out_root=args.out, modules=modules,
                                seed=args.seed, policy_dir=args.policy_dir,
                                verbose=not args.quiet,
-                               progress_interval=args.progress_interval)
+                               progress_interval=args.progress_interval,
+                               speedf=args.speedf)
         results.append(summary)
 
     if len(results) > 1:

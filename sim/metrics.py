@@ -20,10 +20,12 @@ class MetricsCollector:
     also printed as it happens, so a run narrates itself instead of going
     silent between the header and the end summary."""
 
-    def __init__(self, bus, live=False):
+    def __init__(self, bus, live=False, clock=None):
         self.lock = threading.Lock()
         self.live = live
-        self.started_at = time.time()
+        self._clock = clock or time.time    # sim-time under --speedf
+        self.started_at = self._clock()      # sim-time origin (trace/heartbeat)
+        self._real_started = time.time()     # real wall-clock origin
         self.action_results = 0
         self.vetoes = 0
         self.veto_reasons = {}
@@ -47,7 +49,7 @@ class MetricsCollector:
 
     def _emit(self, msg):
         if self.live:
-            print(f"  [{time.time() - self.started_at:6.1f}s] {msg}", flush=True)
+            print(f"  [{self._clock() - self.started_at:6.1f}s] {msg}", flush=True)
 
     def progress_line(self, world, total_sec=None):
         """A compact one-line status heartbeat for the episode loop."""
@@ -57,7 +59,7 @@ class MetricsCollector:
         r = world.robot
         hdg = int(round(math.degrees(r.heading))) % 360
         tot = f"/{int(total_sec)}s" if total_sec else ""
-        return (f"[{time.time() - self.started_at:6.1f}s{tot}] "
+        return (f"[{self._clock() - self.started_at:6.1f}s{tot}] "
                 f"pos=({r.x:.0f},{r.y:.0f}) hdg={hdg:>3}deg "
                 f"dist={world.distance_travelled_cm:.0f}cm "
                 f"batt={world.battery_state()['voltage']}V | "
@@ -113,24 +115,26 @@ class MetricsCollector:
             text = payload.get("text")
             if text:
                 self.announcements.append(
-                    {"t": round(time.time() - self.started_at, 1), "text": text})
+                    {"t": round(self._clock() - self.started_at, 1), "text": text})
                 self._emit(f'says: "{text}"')
 
     def mark_goal_reached(self):
         with self.lock:
             if self.goal_reached_at is None:
-                self.goal_reached_at = time.time() - self.started_at
+                self.goal_reached_at = self._clock() - self.started_at
 
     # ---------- summary ----------
 
     def snapshot(self, world, scenario_name=""):
         with self.lock:
-            wall = time.time() - self.started_at
+            real_wall = time.time() - self._real_started
             coach_wins = sum(1 for e in self.coach_episodes if e["success"])
+            speedf = ((world.sim_time / real_wall) if real_wall > 0 else 1.0)
             return {
                 "scenario": scenario_name,
-                "wall_time_sec": round(wall, 1),
+                "wall_time_sec": round(real_wall, 1),
                 "sim_time_sec": round(world.sim_time, 1),
+                "speed_factor": round(speedf, 2),
                 "distance_travelled_cm": round(world.distance_travelled_cm, 1),
                 "coverage_cells_20cm": len(world.visited_cells),
                 "collisions": world.collision_events,
@@ -156,7 +160,11 @@ class MetricsCollector:
 def print_summary(summary):
     c = summary
     print(f"\n=== {c['scenario']} - episode summary ===")
-    print(f"  time: {c['wall_time_sec']}s   distance: {c['distance_travelled_cm']}cm   "
+    speed = c.get("speed_factor", 1.0)
+    tstr = f"{c['wall_time_sec']}s real"
+    if speed >= 1.1:
+        tstr += f" ({c['sim_time_sec']}s sim, {speed:g}x)"
+    print(f"  time: {tstr}   distance: {c['distance_travelled_cm']}cm   "
           f"coverage: {c['coverage_cells_20cm']} cells")
     print(f"  collisions: {c['collisions']}   vetoes: {c['vetoes']} {c['veto_reasons']}"
           + ("   FELL OFF CLIFF" if c["fell_off_cliff"] else ""))

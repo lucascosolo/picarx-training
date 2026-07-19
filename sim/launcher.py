@@ -53,7 +53,7 @@ def _pick_bus_port():
 class EpisodeRunner:
     def __init__(self, scenario, run_dir, modules=DEFAULT_MODULES,
                  seed=None, policy_dir=None, verbose=True,
-                 progress_interval=5.0):
+                 progress_interval=5.0, speedf=1.0):
         self.scenario = scenario
         self.run_dir = os.path.abspath(run_dir)
         self.modules = [m for m in MODULE_START_ORDER if m in modules]
@@ -64,6 +64,7 @@ class EpisodeRunner:
         self.policy_dir = policy_dir
         self.verbose = verbose
         self.progress_interval = progress_interval
+        self.speedf = max(1.0, float(speedf))
         self.procs = {}
         self.bus_server = None
 
@@ -86,11 +87,18 @@ class EpisodeRunner:
         bus = BusClient(port=port)
         sim = Simulator(self.scenario, bus, socket_path=sock_path,
                         verbose=self.verbose,
-                        progress_interval=self.progress_interval)
+                        progress_interval=self.progress_interval,
+                        speedf=self.speedf)
 
         env = dict(os.environ)
         env["SIM_BUS_PORT"] = str(port)
         env["SIM_SAFETY_SOCKET"] = sock_path
+        if self.speedf != 1.0:
+            # Dilate the modules' clocks to match the sim, sharing the
+            # Simulator's exact epoch so timestamps stay comparable.
+            env["SIM_SPEEDF"] = repr(self.speedf)
+            env["SIM_CLOCK_T0"] = repr(sim._t0)
+            env["SIM_CLOCK_M0"] = repr(time.monotonic())
         # An explicit PICARX_REPO (already in the env copy) is honored and
         # validated by run_module; otherwise run_module locates the repo
         # itself, handling both the dev sibling-checkout and Pi layouts.

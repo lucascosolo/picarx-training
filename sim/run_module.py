@@ -140,6 +140,11 @@ def main():
     if seed:
         random.seed(f"{seed}:{args.module}")
 
+    # Dilate this process's clock BEFORE importing the module, so all of
+    # its tick loops, sleeps and timers run in sim-time (no-op at 1x).
+    from sim import simclock
+    scale = simclock.install()
+
     repo = _resolve_picarx_repo()
     _setup_paths(repo)
 
@@ -147,7 +152,8 @@ def main():
     mod = importlib.import_module(args.module)
     _patch_paths(args.module, mod, os.path.abspath(args.data_dir))
 
-    print(f"[run_module] {args.module} up (repo={repo}, data={args.data_dir})",
+    print(f"[run_module] {args.module} up (repo={repo}, data={args.data_dir}"
+          + (f", speedf={scale:g}x" if scale != 1.0 else "") + ")",
           flush=True)
     ENTRIES[args.module](mod)
 

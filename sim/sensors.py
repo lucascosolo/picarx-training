@@ -43,8 +43,9 @@ MOTION_FLOOR = 0.3                   # sensor noise while static
 
 
 class SensorSynthesizer:
-    def __init__(self, world):
+    def __init__(self, world, clock=None):
         self.world = world
+        self._clock = clock or time.time   # sim-time under --speedf
         self._prev_areas = {}        # obstacle index -> (area, t)
         self._prev_overhead = None   # (area, t)
         self._first_seen = {}        # obstacle index -> ts
@@ -56,18 +57,18 @@ class SensorSynthesizer:
     # last_heard / last_action exactly like world_state does.
     def on_heard(self, payload):
         self.last_heard = {"text": payload.get("text"),
-                           "updated_at": time.time()}
+                           "updated_at": self._clock()}
 
     def on_action_result(self, payload):
         self.last_action = {"source": payload.get("source"),
                             "action": payload.get("action"),
                             "result": payload.get("result"),
-                            "updated_at": time.time()}
+                            "updated_at": self._clock()}
 
     # ---------- snapshot ----------
 
     def build_snapshot(self):
-        now = time.time()
+        now = self._clock()
         w = self.world
         robot = w.robot
 
@@ -183,6 +184,5 @@ class SensorSynthesizer:
         yaw_deg_s = abs(math.degrees(robot.actual_yaw_rate))
         return MOTION_FLOOR + v * MOTION_PER_CM_S + yaw_deg_s * MOTION_PER_DEG_S
 
-    @staticmethod
-    def _stale(updated_at, threshold):
-        return updated_at is None or (time.time() - updated_at) > threshold
+    def _stale(self, updated_at, threshold):
+        return updated_at is None or (self._clock() - updated_at) > threshold

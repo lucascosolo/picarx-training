@@ -25,16 +25,25 @@ WORLD_PUBLISH_HZ = 2         # matches world_state.py PUBLISH_HZ
 
 class Simulator:
     def __init__(self, scenario, bus, socket_path=None, verbose=False,
-                 progress_interval=5.0):
+                 progress_interval=5.0, speedf=1.0):
         self.scenario = scenario
         self.bus = bus
         self.verbose = verbose
         self.progress_interval = progress_interval
+        self.speedf = max(1.0, float(speedf))
+        # Sim-time clock shared with the module subprocesses (same epoch,
+        # same scale), so launcher-side timestamps line up with theirs.
+        self._t0 = time.time()
+        self._clock = (time.time if self.speedf == 1.0
+                       else lambda: self._t0 + (time.time() - self._t0) * self.speedf)
         self.world = scenario.build_world()
         kwargs = {"socket_path": socket_path} if socket_path else {}
-        self.safety = VirtualSafetyDaemon(self.world, **kwargs)
-        self.sensors = SensorSynthesizer(self.world)
-        self.metrics = MetricsCollector(bus, live=verbose)
+        # Physics advances speedf x per real second, matching the modules'
+        # dilated tick rate so the whole system stays in sim-time lockstep.
+        self.safety = VirtualSafetyDaemon(self.world, time_scale=self.speedf,
+                                          **kwargs)
+        self.sensors = SensorSynthesizer(self.world, clock=self._clock)
+        self.metrics = MetricsCollector(bus, live=verbose, clock=self._clock)
         self._running = False
         self.end_reason = None
 
@@ -57,7 +66,7 @@ class Simulator:
 
     def say(self, text):
         """Inject a spoken command exactly as the STT pipeline would."""
-        self.bus.publish("picarx/audio/heard", {"text": text, "ts": time.time()})
+        self.bus.publish("picarx/audio/heard", {"text": text, "ts": self._clock()})
 
     # ---------- episode ----------
 
@@ -71,10 +80,13 @@ class Simulator:
             self.say("explore")
             self._log('sent start cue: "explore"')
 
+        # The loop watches sim-time (self._clock), so a `total`-second
+        # scenario ends after total/speedf real seconds. Poll cadence and
+        # the "let stop land" wait stay real so they don't starve the CPU.
         total = self.scenario.duration_sec
-        deadline = time.time() + total
-        next_progress = time.time() + self.progress_interval
-        while time.time() < deadline:
+        deadline = self._clock() + total
+        next_progress = self._clock() + self.progress_interval
+        while self._clock() < deadline:
             if self.scenario.goal_reached(self.world):
                 self.metrics.mark_goal_reached()
                 self.end_reason = "goal_reached"
@@ -85,17 +97,17 @@ class Simulator:
             if self.world.battery_state()["critical"]:
                 self.end_reason = "battery_critical"
                 break
-            if self.verbose and time.time() >= next_progress:
+            if self.verbose and self._clock() >= next_progress:
                 print("  " + self.metrics.progress_line(self.world, total),
                       flush=True)
                 next_progress += self.progress_interval
-            time.sleep(0.2)
+            time.sleep(0.2 / self.speedf)
         else:
             self.end_reason = "duration_elapsed"
 
         self._log(f"episode ending: {self.end_reason}")
         self.say("stop")
-        time.sleep(1.0)              # let the stop land before teardown
+        time.sleep(1.0 / self.speedf)   # let the stop land before teardown
         self.stop()
         summary = self.metrics.snapshot(self.world, self.scenario.name)
         summary["end_reason"] = self.end_reason
@@ -103,13 +115,15 @@ class Simulator:
 
     def _log(self, msg):
         if self.verbose:
-            print(f"  [{time.time() - self.metrics.started_at:6.1f}s] {msg}",
+            print(f"  [{self._clock() - self.metrics.started_at:6.1f}s] {msg}",
                   flush=True)
 
     # ---------- world-state publishing ----------
 
     def _publish_loop(self):
-        period = 1.0 / WORLD_PUBLISH_HZ
+        # Publish at WORLD_PUBLISH_HZ in SIM-time: real period shrinks by
+        # speedf so consumers see 2Hz of sim-time regardless of speed.
+        period = 1.0 / (WORLD_PUBLISH_HZ * self.speedf)
         while self._running:
             snapshot = self.sensors.build_snapshot()
             self.bus.publish("picarx/state/world", snapshot)
