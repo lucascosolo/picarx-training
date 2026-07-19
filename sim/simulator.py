@@ -24,14 +24,17 @@ WORLD_PUBLISH_HZ = 2         # matches world_state.py PUBLISH_HZ
 
 
 class Simulator:
-    def __init__(self, scenario, bus, socket_path=None):
+    def __init__(self, scenario, bus, socket_path=None, verbose=False,
+                 progress_interval=5.0):
         self.scenario = scenario
         self.bus = bus
+        self.verbose = verbose
+        self.progress_interval = progress_interval
         self.world = scenario.build_world()
         kwargs = {"socket_path": socket_path} if socket_path else {}
         self.safety = VirtualSafetyDaemon(self.world, **kwargs)
         self.sensors = SensorSynthesizer(self.world)
-        self.metrics = MetricsCollector(bus)
+        self.metrics = MetricsCollector(bus, live=verbose)
         self._running = False
         self.end_reason = None
 
@@ -61,12 +64,16 @@ class Simulator:
     def run_episode(self):
         """Block until the scenario ends. Returns the metrics summary."""
         self.start()
+        self._log("modules connecting; settling before the start cue...")
         if self.scenario.auto_explore:
             # Let the modules connect and settle before the start cue.
             time.sleep(2.0)
             self.say("explore")
+            self._log('sent start cue: "explore"')
 
-        deadline = time.time() + self.scenario.duration_sec
+        total = self.scenario.duration_sec
+        deadline = time.time() + total
+        next_progress = time.time() + self.progress_interval
         while time.time() < deadline:
             if self.scenario.goal_reached(self.world):
                 self.metrics.mark_goal_reached()
@@ -78,16 +85,26 @@ class Simulator:
             if self.world.battery_state()["critical"]:
                 self.end_reason = "battery_critical"
                 break
+            if self.verbose and time.time() >= next_progress:
+                print("  " + self.metrics.progress_line(self.world, total),
+                      flush=True)
+                next_progress += self.progress_interval
             time.sleep(0.2)
         else:
             self.end_reason = "duration_elapsed"
 
+        self._log(f"episode ending: {self.end_reason}")
         self.say("stop")
         time.sleep(1.0)              # let the stop land before teardown
         self.stop()
         summary = self.metrics.snapshot(self.world, self.scenario.name)
         summary["end_reason"] = self.end_reason
         return summary
+
+    def _log(self, msg):
+        if self.verbose:
+            print(f"  [{time.time() - self.metrics.started_at:6.1f}s] {msg}",
+                  flush=True)
 
     # ---------- world-state publishing ----------
 

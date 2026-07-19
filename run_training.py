@@ -57,6 +57,11 @@ def main():
     ap.add_argument("--policy-dir", default=None,
                     help="persistent dir for coach_policy.json so learning "
                          "accumulates across runs (default: per-run sandbox)")
+    ap.add_argument("--quiet", action="store_true",
+                    help="only print the start header and end summary "
+                         "(default: live decision/veto/coach trace + heartbeat)")
+    ap.add_argument("--progress-interval", type=float, default=5.0,
+                    help="seconds between status heartbeat lines (default: 5)")
     args = ap.parse_args()
 
     modules = [m.strip() for m in args.modules.split(",") if m.strip()]
@@ -75,7 +80,9 @@ def main():
         print(f"\n>>> scenario: {scenario.name}"
               + (f" - {scenario.description}" if scenario.description else ""))
         summary = run_scenario(scenario, out_root=args.out, modules=modules,
-                               seed=args.seed, policy_dir=args.policy_dir)
+                               seed=args.seed, policy_dir=args.policy_dir,
+                               verbose=not args.quiet,
+                               progress_interval=args.progress_interval)
         results.append(summary)
 
     if len(results) > 1:

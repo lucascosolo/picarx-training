@@ -52,7 +52,8 @@ def _pick_bus_port():
 
 class EpisodeRunner:
     def __init__(self, scenario, run_dir, modules=DEFAULT_MODULES,
-                 seed=None, policy_dir=None):
+                 seed=None, policy_dir=None, verbose=True,
+                 progress_interval=5.0):
         self.scenario = scenario
         self.run_dir = os.path.abspath(run_dir)
         self.modules = [m for m in MODULE_START_ORDER if m in modules]
@@ -61,6 +62,8 @@ class EpisodeRunner:
             raise SystemExit(f"Unknown modules: {sorted(unknown)}")
         self.seed = seed
         self.policy_dir = policy_dir
+        self.verbose = verbose
+        self.progress_interval = progress_interval
         self.procs = {}
         self.bus_server = None
 
@@ -81,7 +84,9 @@ class EpisodeRunner:
         sock_path = f"/tmp/picarx_train_{port}.sock"
 
         bus = BusClient(port=port)
-        sim = Simulator(self.scenario, bus, socket_path=sock_path)
+        sim = Simulator(self.scenario, bus, socket_path=sock_path,
+                        verbose=self.verbose,
+                        progress_interval=self.progress_interval)
 
         env = dict(os.environ)
         env["SIM_BUS_PORT"] = str(port)
@@ -118,6 +123,8 @@ class EpisodeRunner:
     # ---------- subprocess management ----------
 
     def _spawn_modules(self, data_dir, log_dir, env):
+        if self.verbose:
+            print(f"  spawning modules: {', '.join(self.modules)}", flush=True)
         for name in self.modules:
             log = open(os.path.join(log_dir, f"{name}.log"), "w")
             self.procs[name] = (subprocess.Popen(

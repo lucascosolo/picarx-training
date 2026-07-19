@@ -8,21 +8,28 @@ decisions) is collected off the same bus topics the robot itself uses,
 so the numbers describe exactly what the modules experienced.
 """
 import json
+import math
 import threading
 import time
 
 
 class MetricsCollector:
-    """Subscribe to the bus; call snapshot(world) at episode end."""
+    """Subscribe to the bus; call snapshot(world) at episode end.
 
-    def __init__(self, bus):
+    With live=True, every decision, veto, coach event and spoken line is
+    also printed as it happens, so a run narrates itself instead of going
+    silent between the header and the end summary."""
+
+    def __init__(self, bus, live=False):
         self.lock = threading.Lock()
+        self.live = live
         self.started_at = time.time()
         self.action_results = 0
         self.vetoes = 0
         self.veto_reasons = {}
         self.decisions = {}           # kind -> count
         self.evade_triggers = {}      # trigger -> count
+        self.last_decision = None
         self.coach_queries = 0
         self.coach_suggestions = 0
         self.coach_episodes = []      # {situation_key, success}
@@ -36,6 +43,26 @@ class MetricsCollector:
         bus.subscribe("picarx/coach/episode", self._on_coach_episode)
         bus.subscribe("picarx/audio/speak", self._on_speak)
 
+    # ---------- live trace ----------
+
+    def _emit(self, msg):
+        if self.live:
+            print(f"  [{time.time() - self.started_at:6.1f}s] {msg}", flush=True)
+
+    def progress_line(self, world, total_sec=None):
+        """A compact one-line status heartbeat for the episode loop."""
+        with self.lock:
+            last = self.last_decision or "-"
+            vetoes = self.vetoes
+        r = world.robot
+        hdg = int(round(math.degrees(r.heading))) % 360
+        tot = f"/{int(total_sec)}s" if total_sec else ""
+        return (f"[{time.time() - self.started_at:6.1f}s{tot}] "
+                f"pos=({r.x:.0f},{r.y:.0f}) hdg={hdg:>3}deg "
+                f"dist={world.distance_travelled_cm:.0f}cm "
+                f"batt={world.battery_state()['voltage']}V | "
+                f"vetoes={vetoes} collisions={world.collision_events} last={last}")
+
     # ---------- callbacks ----------
 
     def _on_action_result(self, payload):
@@ -46,29 +73,40 @@ class MetricsCollector:
                 self.vetoes += 1
                 code = result.get("reason_code", "unknown")
                 self.veto_reasons[code] = self.veto_reasons.get(code, 0) + 1
+                self._emit(f"VETO: {code}")
 
     def _on_decision(self, payload):
         with self.lock:
             kind = payload.get("kind", "unknown")
             self.decisions[kind] = self.decisions.get(kind, 0) + 1
+            self.last_decision = kind
             if kind == "evade":
                 trig = (payload.get("choice") or {}).get("trigger", "unknown")
                 self.evade_triggers[trig] = self.evade_triggers.get(trig, 0) + 1
+                self._emit(f"decision: evade (trigger={trig})")
+            else:
+                self._emit(f"decision: {kind}")
 
     def _on_coach_query(self, payload):
         with self.lock:
             self.coach_queries += 1
+            self._emit("coach: query")
 
     def _on_coach_suggestion(self, payload):
         with self.lock:
             self.coach_suggestions += 1
+            steps = payload.get("steps")
+            n = f" ({len(steps)} steps)" if isinstance(steps, list) else ""
+            self._emit(f"coach: suggestion{n}")
 
     def _on_coach_episode(self, payload):
         with self.lock:
+            success = payload.get("success")
             self.coach_episodes.append({
                 "situation_key": payload.get("situation_key"),
-                "success": payload.get("success"),
+                "success": success,
             })
+            self._emit(f"coach: episode {'WIN' if success else 'fail'}")
 
     def _on_speak(self, payload):
         with self.lock:
@@ -76,6 +114,7 @@ class MetricsCollector:
             if text:
                 self.announcements.append(
                     {"t": round(time.time() - self.started_at, 1), "text": text})
+                self._emit(f'says: "{text}"')
 
     def mark_goal_reached(self):
         with self.lock:
