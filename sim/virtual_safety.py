@@ -81,10 +81,11 @@ class VirtualSafetyDaemon:
 
     def stop(self):
         self._running = False
-        try:
-            self._server.close()
-        except OSError:
-            pass
+        if self._server is not None:
+            try:
+                self._server.close()
+            except OSError:
+                pass
         try:
             os.remove(self.socket_path)
         except OSError:

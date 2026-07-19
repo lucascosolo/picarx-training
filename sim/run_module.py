@@ -31,14 +31,40 @@ TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAHO_SHIM = os.path.join(TRAINING_ROOT, "sim", "paho_shim")
 
 
+def _has_modules(path):
+    """A valid picarx repo root has layer_b/modules under it."""
+    return os.path.isdir(os.path.join(path, "layer_b", "modules"))
+
+
 def _resolve_picarx_repo():
-    repo = os.environ.get("PICARX_REPO")
-    if repo:
-        return os.path.abspath(repo)
-    guess = os.path.join(os.path.dirname(TRAINING_ROOT), "picarx")
-    if os.path.isdir(os.path.join(guess, "layer_b")):
-        return guess
-    raise SystemExit("Cannot find the picarx repo; set PICARX_REPO")
+    """Locate the picarx repo root (the dir containing layer_b/modules).
+
+    Works both on a dev box, where picarx is a sibling checkout
+    (<parent>/picarx), and on the Pi, where layer_b lives directly under
+    the home dir (repo root == /home/picarx, beside picarx-training).
+    An explicit PICARX_REPO always wins but is still validated so a stale
+    value fails loudly instead of causing opaque import errors."""
+    parent = os.path.dirname(TRAINING_ROOT)
+    explicit = os.environ.get("PICARX_REPO")
+    candidates = []
+    if explicit:
+        candidates.append(os.path.abspath(explicit))
+    candidates += [
+        os.path.join(parent, "picarx"),   # sibling checkout (dev machine)
+        parent,                           # layer_b beside training (Pi home)
+        os.path.expanduser("~/picarx"),
+        os.path.expanduser("~"),
+    ]
+    for c in candidates:
+        if _has_modules(c):
+            return c
+    if explicit:
+        raise SystemExit(
+            f"PICARX_REPO={explicit} has no layer_b/modules under it")
+    raise SystemExit(
+        "Cannot find the picarx repo (a dir containing layer_b/modules).\n"
+        "Set PICARX_REPO to the picarx repo root. Tried: "
+        + ", ".join(dict.fromkeys(candidates)))
 
 
 def _setup_paths(repo):

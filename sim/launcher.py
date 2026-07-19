@@ -79,8 +79,9 @@ class EpisodeRunner:
 
         env = dict(os.environ)
         env["SIM_BUS_PORT"] = str(port)
-        env["PICARX_REPO"] = env.get(
-            "PICARX_REPO", os.path.join(os.path.dirname(TRAINING_ROOT), "picarx"))
+        # An explicit PICARX_REPO (already in the env copy) is honored and
+        # validated by run_module; otherwise run_module locates the repo
+        # itself, handling both the dev sibling-checkout and Pi layouts.
         if self.seed is not None:
             env["SIM_SEED"] = str(self.seed)
         if self.policy_dir:
