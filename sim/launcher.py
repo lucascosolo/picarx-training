@@ -74,11 +74,18 @@ class EpisodeRunner:
         self.bus_server = BusServer(port=port)
         self.bus_server.start()
 
+        # A training-private safety socket (keyed by bus port so parallel
+        # runs don't clash), NOT the real robot's /tmp/picarx_safety.sock.
+        # This keeps the sim from touching a running safety_daemon and,
+        # crucially, stops the training arbiter from driving real hardware.
+        sock_path = f"/tmp/picarx_train_{port}.sock"
+
         bus = BusClient(port=port)
-        sim = Simulator(self.scenario, bus)
+        sim = Simulator(self.scenario, bus, socket_path=sock_path)
 
         env = dict(os.environ)
         env["SIM_BUS_PORT"] = str(port)
+        env["SIM_SAFETY_SOCKET"] = sock_path
         # An explicit PICARX_REPO (already in the env copy) is honored and
         # validated by run_module; otherwise run_module locates the repo
         # itself, handling both the dev sibling-checkout and Pi layouts.
@@ -89,6 +96,8 @@ class EpisodeRunner:
 
         summary = None
         try:
+            sim.start()              # bind the safety socket before any
+                                     # module tries to connect to it
             self._spawn_modules(data_dir, log_dir, env)
             summary = sim.run_episode()
             summary["seed"] = self.seed

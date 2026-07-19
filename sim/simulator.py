@@ -41,6 +41,8 @@ class Simulator:
     # ---------- lifecycle ----------
 
     def start(self):
+        if self._running:
+            return                   # idempotent: launcher starts us early
         self._running = True
         self.safety.start()
         threading.Thread(target=self._publish_loop, daemon=True,

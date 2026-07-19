@@ -79,6 +79,15 @@ def _patch_paths(name, mod, data_dir):
     """Rebind hardcoded Pi paths into the sandbox data dir."""
     os.makedirs(data_dir, exist_ok=True)
 
+    # Redirect the hardcoded safety socket (/tmp/picarx_safety.sock) to
+    # this run's private one, so the training arbiter talks to the
+    # VIRTUAL daemon and can never reach a real safety_daemon / drive the
+    # physical robot. Generic: any module exposing SOCKET_PATH (arbiter,
+    # world_state, distance_sensor) is redirected.
+    sock = os.environ.get("SIM_SAFETY_SOCKET")
+    if sock and hasattr(mod, "SOCKET_PATH"):
+        mod.SOCKET_PATH = sock
+
     import spatial_store
     spatial_store.DB_DIR = data_dir
     spatial_store.DB_PATH = os.path.join(data_dir, "spatial.db")

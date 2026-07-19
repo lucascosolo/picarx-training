@@ -67,7 +67,14 @@ class VirtualSafetyDaemon:
 
     def start(self):
         if os.path.exists(self.socket_path):
-            os.remove(self.socket_path)
+            try:
+                os.remove(self.socket_path)
+            except PermissionError as e:
+                raise SystemExit(
+                    f"Cannot claim safety socket {self.socket_path!r}: {e}. "
+                    "It is owned by another process (a real safety_daemon?). "
+                    "Training uses its own socket, so this likely means "
+                    "SIM_SAFETY_SOCKET points at the real robot's path.") from e
         self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server.bind(self.socket_path)
         os.chmod(self.socket_path, 0o666)
