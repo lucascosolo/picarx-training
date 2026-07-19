@@ -1,0 +1,13 @@
+{
+  "name": "cliff_table",
+  "description": "A tabletop with a drop-off edge on the right half. The virtual grayscale sensors must veto forward at the edge; falling off ends the episode as a hard failure.",
+  "bounds": {"x_min": 0, "y_min": 0, "x_max": 300, "y_max": 200},
+  "robot": {"x": 60, "y": 100, "heading_deg": 0},
+  "obstacles": [
+    {"shape": "circle", "x": 80, "y": 170, "r": 10, "label": "cup", "size_k": 22}
+  ],
+  "cliffs": [
+    {"x": 210, "y": 0, "w": 90, "h": 200}
+  ],
+  "duration_sec": 90
+}

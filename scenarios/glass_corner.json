@@ -1,0 +1,12 @@
+{
+  "name": "glass_corner",
+  "description": "Two sensor-invisible panels (no echo, no SSD class) meet in an L, forming a pocket neither ultrasonic nor vision can see. The robot can only escape via physical stuck detection - forward commanded but the scene stays frozen - making this a harder cousin of glass_wall for the coach's escape learning.",
+  "bounds": {"x_min": 0, "y_min": 0, "x_max": 360, "y_max": 260},
+  "robot": {"x": 55, "y": 120, "heading_deg": 0},
+  "obstacles": [
+    {"shape": "rect", "x": 200, "y": 40, "w": 8, "h": 180, "ultrasonic": false},
+    {"shape": "rect", "x": 80, "y": 40, "w": 128, "h": 8, "ultrasonic": false},
+    {"shape": "circle", "x": 300, "y": 200, "r": 12, "label": "vase", "size_k": 30}
+  ],
+  "duration_sec": 110
+}

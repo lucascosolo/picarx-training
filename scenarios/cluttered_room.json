@@ -1,0 +1,16 @@
+{
+  "name": "cluttered_room",
+  "description": "A living room densely packed with labelled objects and no goal. Expect near-constant vision tracking and frequent steer-arounds with few hard vetoes - a stress test for busy scenes and for reflection's pattern mining over many decisions.",
+  "bounds": {"x_min": 0, "y_min": 0, "x_max": 400, "y_max": 340},
+  "robot": {"x": 200, "y": 170, "heading_deg": 45},
+  "obstacles": [
+    {"shape": "circle", "x": 90, "y": 90, "r": 16, "label": "chair", "size_k": 45},
+    {"shape": "circle", "x": 310, "y": 100, "r": 14, "label": "potted plant", "size_k": 38},
+    {"shape": "circle", "x": 120, "y": 270, "r": 12, "label": "backpack", "size_k": 40},
+    {"shape": "circle", "x": 300, "y": 260, "r": 18, "label": "chair", "size_k": 45},
+    {"shape": "circle", "x": 60, "y": 180, "r": 10, "label": "bottle", "size_k": 22},
+    {"shape": "circle", "x": 340, "y": 180, "r": 9, "label": "cup", "size_k": 22},
+    {"shape": "rect", "x": 180, "y": 300, "w": 60, "h": 14, "label": "book", "size_k": 30}
+  ],
+  "duration_sec": 110
+}

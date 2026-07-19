@@ -1,0 +1,12 @@
+{
+  "name": "low_battery",
+  "description": "Starts just above the low-battery threshold with an aggressive drive drain, so the pack crosses into critical mid-episode and the run ends on battery_critical. Exercises the low/critical battery reporting and the battery-abort end condition rather than obstacle handling.",
+  "bounds": {"x_min": 0, "y_min": 0, "x_max": 360, "y_max": 260},
+  "robot": {"x": 60, "y": 130, "heading_deg": 0},
+  "obstacles": [
+    {"shape": "circle", "x": 220, "y": 130, "r": 16, "label": "chair", "size_k": 45},
+    {"shape": "circle", "x": 140, "y": 210, "r": 12, "label": "potted plant", "size_k": 38}
+  ],
+  "physics": {"battery_start_v": 6.62, "battery_drive_drain_v_s": 0.006},
+  "duration_sec": 120
+}

@@ -1,0 +1,14 @@
+{
+  "name": "pillar_slalom",
+  "description": "Staggered pillars down a shallow hall force alternating left/right steer-arounds on the way to the goal. Stresses the steer-around law's ability to chain evasions without oscillating into a wall.",
+  "bounds": {"x_min": 0, "y_min": 0, "x_max": 520, "y_max": 200},
+  "robot": {"x": 40, "y": 100, "heading_deg": 0},
+  "obstacles": [
+    {"shape": "circle", "x": 140, "y": 70, "r": 14, "label": "bottle", "size_k": 22},
+    {"shape": "circle", "x": 250, "y": 130, "r": 15, "label": "backpack", "size_k": 40},
+    {"shape": "circle", "x": 360, "y": 70, "r": 14, "label": "potted plant", "size_k": 38},
+    {"shape": "circle", "x": 440, "y": 135, "r": 13, "label": "cup", "size_k": 22}
+  ],
+  "goal": {"x": 490, "y": 100, "radius": 28},
+  "duration_sec": 130
+}
