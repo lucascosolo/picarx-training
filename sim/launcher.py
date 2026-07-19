@@ -21,7 +21,6 @@ like on-robot data.
 import json
 import os
 import shutil
-import socket as socketlib
 import subprocess
 import sys
 import time
@@ -38,16 +37,6 @@ MODULE_START_ORDER = ("arbiter", "event_logger", "coach", "explorer",
                       "field_agent")   # field_agent last: everything ready first
 
 
-def _port_free(port, host="127.0.0.1"):
-    with socketlib.socket(socketlib.AF_INET, socketlib.SOCK_STREAM) as s:
-        return s.connect_ex((host, port)) != 0
-
-
-def _pick_bus_port():
-    for port in (1883, 18830, 18831):
-        if _port_free(port):
-            return port
-    raise SystemExit("No free port for the bus (tried 1883, 18830, 18831)")
 
 
 class EpisodeRunner:
@@ -74,9 +63,11 @@ class EpisodeRunner:
         os.makedirs(data_dir, exist_ok=True)
         os.makedirs(log_dir, exist_ok=True)
 
-        port = _pick_bus_port()
-        self.bus_server = BusServer(port=port)
+        # port 0 -> OS picks a free ephemeral port; read the real one back.
+        # Parallel runs each get a unique port with no collision or race.
+        self.bus_server = BusServer(port=0)
         self.bus_server.start()
+        port = self.bus_server.port
 
         # A training-private safety socket (keyed by bus port so parallel
         # runs don't clash), NOT the real robot's /tmp/picarx_safety.sock.
@@ -169,8 +160,10 @@ class EpisodeRunner:
 
 
 def run_scenario(scenario, out_root="runs", **kwargs):
+    # Include the pid so parallel runs started in the same second (e.g.
+    # `for i in ...; do run_training.py ... & done`) get distinct dirs.
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    run_dir = os.path.join(out_root, f"{scenario.name}-{stamp}")
+    run_dir = os.path.join(out_root, f"{scenario.name}-{stamp}-{os.getpid()}")
     runner = EpisodeRunner(scenario, run_dir, **kwargs)
     summary = runner.run()
     if summary:

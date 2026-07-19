@@ -63,6 +63,10 @@ class BusServer:
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind((self.host, self.port))
+        # With port=0 the OS assigns a free ephemeral port atomically at
+        # bind; read it back so parallel runs never collide or race on a
+        # fixed port list.
+        self.port = self._server.getsockname()[1]
         self._server.listen(32)
         self._running = True
         self._accept_thread = threading.Thread(target=self._accept_loop,
