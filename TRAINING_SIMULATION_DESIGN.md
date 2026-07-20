@@ -128,21 +128,67 @@ Multiple scenarios can be composed into a test suite that runs in sequence or pa
 
 **Event Logger**: All MQTT traffic during simulation is logged to events.db just like real robot operation. Reflection.py can analyze simulated events identically to real ones, extracting patterns and facts.
 
-**Reflection & Pattern Mining**: Facts and patterns learned in simulation carry over to real deployment. The robot arrives at the physical world with pre-trained intuitions.
+**Reflection & Pattern Mining**: Facts and patterns learned in simulation carry over to real deployment via the knowledge pack (below). The robot arrives at the physical world with pre-trained intuitions.
 
 **Decision Journal**: Every decision field_agent makes in simulation is journaled, building a corpus of "practice decisions" that can be reviewed or used to identify systematic biases.
 
 **Coach Policy Cache**: Arms and outcomes accumulated during simulation are persisted to the policy file. Successful tactics discovered in the training environment remain available on the real robot.
 
+## The knowledge pack — turning a session into something the robot can use
+
+A raw run leaves behind a coach policy and a pile of per-episode event logs;
+neither is, on its own, something you can hand a robot. Passing
+`--knowledge-dir <dir>` (older alias: `--policy-dir`) turns that directory into
+an **accumulating, deployable knowledge pack**:
+
+```bash
+python3 run_training.py scenarios/*.json --knowledge-dir training_data
+```
+
+Across the suite the directory gathers:
+
+- **`coach_policy.json`** — the coach's learned escape maneuvers, accumulated by
+  `coach.py` exactly as on the robot.
+- **`events.db`** — every episode's event log, folded in after each run
+  (`launcher._accumulate_events`) so a suite-wide analysis has real volume.
+
+When the suite finishes, `sim/knowledge.py` distils those into two portable
+files next to them:
+
+- **`navigation_facts.json`** — transferable facts + behavioural patterns. The
+  patterns come from the robot's **own unmodified `pattern_miner`** ("obstacle
+  vetoes come in bursts, a single small retreat won't clear it"; "escapes here
+  that start by reversing usually work"); the facts are first-person
+  escape-tactic tendencies aggregated from the coach's win/loss records, mirroring
+  `reflection.py`'s self-model thresholds. No API key and no network required.
+- **`knowledge_pack.json`** — a manifest: scenarios trained, episode/collision/
+  coach totals, and what the pack contains.
+
+**What is deliberately *not* exported:** place-specific and spatial memories.
+The sim's rooms are not the real house, so "the corner with the sofa vetoes a
+lot" would be a lie on the physical robot. Only knowledge about the *robot
+itself* — how Ackermann steering escapes a trap, which failure modes loop —
+transfers. The robot rebuilds its map from real sensors.
+
+The robot ingests a pack with its own [`layer_b/import_training.py`](../picarx/layer_b/import_training.py),
+which **merges** (never overwrites): simulated win/loss counts are *added* to
+whatever the robot already learned in the real world, so the two reinforce the
+same UCB1 statistics.
+
 ## Deployment Workflow
 
-1. **Develop & test** locally using the simulator
-2. **Run scenario suite** to verify decision quality across diverse situations
-3. **Inspect learned policy** (coach.py's cached arms and tactics)
-4. **Deploy to robot** with the trained policy file—the bot begins physical operation with experience
-5. **Collect real-world data** from physical exploration
-6. **Merge learnings** from real operation back into the policy cache
-7. **Iterate**: use real-world edge cases as new training scenarios
+1. **Develop & test** locally using the simulator.
+2. **Run a scenario suite** with `--knowledge-dir training_data` to accumulate a
+   knowledge pack across diverse situations.
+3. **Inspect the pack** — `knowledge_pack.json` for provenance, `navigation_facts.json`
+   for the distilled intuitions, `coach_policy.json` for the learned arms.
+4. **Deploy to the robot**: copy `training_data/` over and, with Layer B stopped,
+   `python3 layer_b/import_training.py training_data` (add `--dry-run` first to
+   preview). Restart the orchestrator; the bot begins physical operation with experience.
+5. **Collect real-world data** from physical exploration.
+6. **Merge learnings** — real operation keeps updating the same `coach_policy.json`
+   and `semantic.db` the pack seeded.
+7. **Iterate**: capture real-world edge cases as new scenarios and retrain.
 
 Over time, the robot learns from both simulated practice and real experience, converging on robust behavior.
 

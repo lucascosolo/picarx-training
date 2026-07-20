@@ -21,6 +21,7 @@ like on-robot data.
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -41,7 +42,7 @@ MODULE_START_ORDER = ("arbiter", "event_logger", "coach", "explorer",
 
 class EpisodeRunner:
     def __init__(self, scenario, run_dir, modules=DEFAULT_MODULES,
-                 seed=None, policy_dir=None, verbose=True,
+                 seed=None, knowledge_dir=None, verbose=True,
                  progress_interval=5.0, speedf=1.0):
         self.scenario = scenario
         self.run_dir = os.path.abspath(run_dir)
@@ -50,7 +51,11 @@ class EpisodeRunner:
         if unknown:
             raise SystemExit(f"Unknown modules: {sorted(unknown)}")
         self.seed = seed
-        self.policy_dir = policy_dir
+        # The persistent knowledge dir accumulates the deployable learning
+        # ACROSS episodes: the coach writes coach_policy.json here, and after
+        # each run we fold this episode's event log into a shared events.db
+        # here so a suite-wide pattern mine has real volume to work with.
+        self.knowledge_dir = os.path.abspath(knowledge_dir) if knowledge_dir else None
         self.verbose = verbose
         self.progress_interval = progress_interval
         self.speedf = max(1.0, float(speedf))
@@ -95,8 +100,10 @@ class EpisodeRunner:
         # itself, handling both the dev sibling-checkout and Pi layouts.
         if self.seed is not None:
             env["SIM_SEED"] = str(self.seed)
-        if self.policy_dir:
-            env["SIM_POLICY_DIR"] = os.path.abspath(self.policy_dir)
+        if self.knowledge_dir:
+            # coach.py reads SIM_POLICY_DIR (see run_module) - point it at the
+            # knowledge dir so the policy accumulates there alongside events.db.
+            env["SIM_POLICY_DIR"] = self.knowledge_dir
 
         summary = None
         try:
@@ -117,7 +124,40 @@ class EpisodeRunner:
             if self.scenario.path:
                 shutil.copy(self.scenario.path,
                             os.path.join(self.run_dir, "scenario.json"))
+            # Fold this episode's events into the suite-wide corpus so the
+            # end-of-suite pattern mine sees every episode, not just the last.
+            if self.knowledge_dir:
+                self._accumulate_events(os.path.join(data_dir, "events.db"))
         return summary
+
+    def _accumulate_events(self, run_events_db):
+        """Append this run's event rows into the knowledge dir's shared
+        events.db. Runs AFTER teardown, so event_logger's connection is closed
+        and its WAL is applied when we attach the file read-through. Fail-soft:
+        a lock (parallel invocations sharing a dir) or a missing db just skips
+        this episode's contribution rather than aborting the run."""
+        if not os.path.exists(run_events_db):
+            return
+        dest = os.path.join(self.knowledge_dir, "events.db")
+        try:
+            conn = sqlite3.connect(dest)
+            try:
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS events ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, "
+                    "topic TEXT NOT NULL, payload_json TEXT NOT NULL)")
+                conn.execute("ATTACH DATABASE ? AS src", (run_events_db,))
+                conn.execute(
+                    "INSERT INTO events (ts, topic, payload_json) "
+                    "SELECT ts, topic, payload_json FROM src.events")
+                conn.commit()
+                conn.execute("DETACH DATABASE src")
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            if self.verbose:
+                print(f"  (could not accumulate events into knowledge dir: {e})")
 
     # ---------- subprocess management ----------
 

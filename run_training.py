@@ -11,8 +11,8 @@ Examples:
   # one scenario, default modules (arbiter, field_agent, event_logger, coach)
   python3 run_training.py scenarios/open_room.json
 
-  # a whole suite, accumulating coach learning across scenarios
-  python3 run_training.py scenarios/*.json --policy-dir training_data
+  # a whole suite, accumulating learning into a deployable knowledge pack
+  python3 run_training.py scenarios/*.json --knowledge-dir training_data
 
   # baseline without the coach (canned evasion only), for comparison
   python3 run_training.py scenarios/box_corner.json --no-coach
@@ -27,6 +27,10 @@ Examples:
 
 Each episode writes runs/<scenario>-<timestamp>/ with metrics.json,
 per-module logs, and the sandboxed events.db the modules produced.
+
+With --knowledge-dir, the suite ALSO accumulates a deployable knowledge
+pack there (coach_policy.json + navigation_facts.json + knowledge_pack.json)
+that the real robot imports with `layer_b/import_training.py`.
 """
 import argparse
 import json
@@ -37,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from sim.launcher import DEFAULT_MODULES, run_scenario   # noqa: E402
 from sim.scenario import Scenario                        # noqa: E402
+from sim import knowledge                                # noqa: E402
 
 
 def main():
@@ -58,9 +63,14 @@ def main():
     coach_group.add_argument("--no-coach", dest="coach", action="store_false",
                              help="run without the coach; field_agent falls "
                                   "back to its canned evasion behavior")
+    ap.add_argument("--knowledge-dir", default=None,
+                    help="persistent dir the suite accumulates a deployable "
+                         "knowledge pack into (coach_policy.json + events.db "
+                         "-> navigation_facts.json + knowledge_pack.json). "
+                         "Learning builds across runs; the real robot imports "
+                         "it with layer_b/import_training.py.")
     ap.add_argument("--policy-dir", default=None,
-                    help="persistent dir for coach_policy.json so learning "
-                         "accumulates across runs (default: per-run sandbox)")
+                    help="deprecated alias for --knowledge-dir (kept working).")
     ap.add_argument("--quiet", action="store_true",
                     help="only print the start header and end summary "
                          "(default: live decision/veto/coach trace + heartbeat)")
@@ -75,6 +85,8 @@ def main():
     args = ap.parse_args()
     if args.speedf < 1.0:
         ap.error("--speedf must be >= 1.0")
+    # --policy-dir is the old name for the same persistent dir.
+    knowledge_dir = args.knowledge_dir or args.policy_dir
 
     modules = [m.strip() for m in args.modules.split(",") if m.strip()]
     if args.coach is True and "coach" not in modules:
@@ -93,7 +105,7 @@ def main():
         print(f"\n>>> scenario: {scenario.name}"
               + (f" - {scenario.description}" if scenario.description else ""))
         summary = run_scenario(scenario, out_root=args.out, modules=modules,
-                               seed=args.seed, policy_dir=args.policy_dir,
+                               seed=args.seed, knowledge_dir=knowledge_dir,
                                verbose=not args.quiet,
                                progress_interval=args.progress_interval,
                                speedf=args.speedf)
@@ -110,6 +122,12 @@ def main():
                  if r["goal_reached_at_sec"] is not None]
         if goals:
             print(f"  goals reached: {len(goals)}")
+
+    # Distill everything that accumulated into a deployable knowledge pack.
+    # Runs for a single scenario too, so `--knowledge-dir` always leaves the
+    # robot something to import.
+    if knowledge_dir:
+        knowledge.consolidate(knowledge_dir, summaries=results)
 
 
 if __name__ == "__main__":
