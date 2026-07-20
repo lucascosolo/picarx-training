@@ -25,6 +25,12 @@ Examples:
   python3 run_training.py scenarios/corridor.json --seed 7 \
       --modules arbiter,field_agent,event_logger,coach,explorer
 
+  # on-robot idle self-training: refine the robot's OWN live learning, then
+  # import it back with --adopt (SIGTERM the run to stop it the instant the
+  # robot has real work to do)
+  python3 run_training.py scenarios/*.json --seed-from layer_b/data \
+      --knowledge-dir /tmp/selftrain --speedf 4 --quiet
+
 Each episode writes runs/<scenario>-<timestamp>/ with metrics.json,
 per-module logs, and the sandboxed events.db the modules produced.
 
@@ -35,13 +41,29 @@ that the real robot imports with `layer_b/import_training.py`.
 import argparse
 import json
 import os
+import signal
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from sim.launcher import DEFAULT_MODULES, run_scenario   # noqa: E402
+from sim.launcher import (DEFAULT_MODULES, run_scenario,   # noqa: E402
+                          seed_knowledge_dir)
 from sim.scenario import Scenario                        # noqa: E402
 from sim import knowledge                                # noqa: E402
+
+
+def _sigterm_to_keyboardinterrupt(signum, frame):
+    raise KeyboardInterrupt()
+
+
+def _install_sigterm_handler():
+    """Make a SIGTERM behave like Ctrl-C so the caller can kill an idle
+    self-training run instantly and cleanly. Default SIGTERM would terminate
+    this process WITHOUT unwinding, orphaning the module subprocesses and the
+    bus thread; raising KeyboardInterrupt instead runs EpisodeRunner.run()'s
+    finally (terminate subprocesses, stop the sim, close the bus) on the way
+    out. SIGINT already raises KeyboardInterrupt, so both paths converge."""
+    signal.signal(signal.SIGTERM, _sigterm_to_keyboardinterrupt)
 
 
 def main():
@@ -71,6 +93,18 @@ def main():
                          "it with layer_b/import_training.py.")
     ap.add_argument("--policy-dir", default=None,
                     help="deprecated alias for --knowledge-dir (kept working).")
+    ap.add_argument("--seed-from", default=None, metavar="DIR",
+                    help="before the run, seed the knowledge dir from the "
+                         "robot's live data DIR (e.g. layer_b/data): copies "
+                         "coach_policy.json + events.db/semantic.db if present, "
+                         "so the sim REFINES real learning. Files already in the "
+                         "knowledge dir are kept (resumes build on progress). "
+                         "The pack's lineage fingerprints this seed, so the "
+                         "robot imports it back with --adopt. Requires "
+                         "--knowledge-dir.")
+    ap.add_argument("--seed-force", action="store_true",
+                    help="with --seed-from, overwrite files already present in "
+                         "the knowledge dir instead of keeping them.")
     ap.add_argument("--quiet", action="store_true",
                     help="only print the start header and end summary "
                          "(default: live decision/veto/coach trace + heartbeat)")
@@ -88,6 +122,24 @@ def main():
     # --policy-dir is the old name for the same persistent dir.
     knowledge_dir = args.knowledge_dir or args.policy_dir
 
+    if args.seed_from and not knowledge_dir:
+        ap.error("--seed-from needs a destination: pass --knowledge-dir too")
+
+    # A SIGTERM must tear the run down as cleanly as Ctrl-C, so an idle
+    # self-training run can be killed the instant the robot wakes up.
+    _install_sigterm_handler()
+
+    # Seed the knowledge dir from the robot's live data BEFORE anything reads
+    # it, so the coach refines real learning and the seed lineage below is the
+    # robot's, not a blank slate.
+    if args.seed_from:
+        seed_knowledge_dir(args.seed_from, knowledge_dir, force=args.seed_force)
+
+    # Capture the lineage of the seed policy NOW, before the coach refines
+    # coach_policy.json in place, so the pack records which robot policy it
+    # descends from ('cold' if the dir wasn't seeded). See sim.knowledge.
+    seed_lineage = knowledge.seed_lineage(knowledge_dir) if knowledge_dir else None
+
     modules = [m.strip() for m in args.modules.split(",") if m.strip()]
     if args.coach is True and "coach" not in modules:
         modules.append("coach")
@@ -98,18 +150,26 @@ def main():
           + (f"   [{args.speedf:g}x speed]" if args.speedf != 1.0 else ""))
 
     results = []
-    for path in args.scenarios:
-        scenario = Scenario.load(path)
-        if args.duration:
-            scenario.duration_sec = args.duration
-        print(f"\n>>> scenario: {scenario.name}"
-              + (f" - {scenario.description}" if scenario.description else ""))
-        summary = run_scenario(scenario, out_root=args.out, modules=modules,
-                               seed=args.seed, knowledge_dir=knowledge_dir,
-                               verbose=not args.quiet,
-                               progress_interval=args.progress_interval,
-                               speedf=args.speedf)
-        results.append(summary)
+    interrupted = False
+    try:
+        for path in args.scenarios:
+            scenario = Scenario.load(path)
+            if args.duration:
+                scenario.duration_sec = args.duration
+            print(f"\n>>> scenario: {scenario.name}"
+                  + (f" - {scenario.description}" if scenario.description else ""))
+            summary = run_scenario(scenario, out_root=args.out, modules=modules,
+                                   seed=args.seed, knowledge_dir=knowledge_dir,
+                                   verbose=not args.quiet,
+                                   progress_interval=args.progress_interval,
+                                   speedf=args.speedf)
+            results.append(summary)
+    except KeyboardInterrupt:
+        # SIGTERM/Ctrl-C: the in-flight episode already tore itself down in
+        # EpisodeRunner.run()'s finally (subprocesses + bus). Skip the rest of
+        # the suite and still distill whatever completed below.
+        interrupted = True
+        print("\nInterrupted - stopped cleanly after the current episode.")
 
     if len(results) > 1:
         ok = [r for r in results if r]
@@ -124,10 +184,13 @@ def main():
             print(f"  goals reached: {len(goals)}")
 
     # Distill everything that accumulated into a deployable knowledge pack.
-    # Runs for a single scenario too, so `--knowledge-dir` always leaves the
-    # robot something to import.
+    # Runs for a single scenario too - and even after an interrupt - so
+    # `--knowledge-dir` always leaves the robot something to import.
     if knowledge_dir:
-        knowledge.consolidate(knowledge_dir, summaries=results)
+        knowledge.consolidate(knowledge_dir, summaries=results,
+                              lineage=seed_lineage)
+        if interrupted:
+            print("Distilled the partial run into the knowledge pack.")
 
 
 if __name__ == "__main__":

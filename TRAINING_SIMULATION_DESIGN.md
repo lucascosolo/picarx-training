@@ -162,7 +162,8 @@ files next to them:
   escape-tactic tendencies aggregated from the coach's win/loss records, mirroring
   `reflection.py`'s self-model thresholds. No API key and no network required.
 - **`knowledge_pack.json`** — a manifest: scenarios trained, episode/collision/
-  coach totals, and what the pack contains.
+  coach totals, what the pack contains, and a **lineage** id (see below) marking
+  which robot policy the pack descends from.
 
 **What is deliberately *not* exported:** place-specific and spatial memories.
 The sim's rooms are not the real house, so "the corner with the sofa vetoes a
@@ -171,9 +172,59 @@ itself* — how Ackermann steering escapes a trap, which failure modes loop —
 transfers. The robot rebuilds its map from real sensors.
 
 The robot ingests a pack with its own [`layer_b/import_training.py`](../picarx/layer_b/import_training.py),
-which **merges** (never overwrites): simulated win/loss counts are *added* to
-whatever the robot already learned in the real world, so the two reinforce the
-same UCB1 statistics.
+which **combines** (never overwrites), in one of two modes for an escape
+maneuver the robot already knows:
+
+- **merge** (default) — the pack's win/loss counts are *added* to the robot's,
+  so two **independent** learners reinforce the same UCB1 statistics. Right for
+  a pack trained on a dev machine or from a cold-started sim.
+- **adopt** (`--adopt`) — the pack's refined counts **replace** the robot's,
+  because the pack was seeded from *this robot's own* policy (see
+  **Self-training from live data** below) and summing would double-count the
+  shared seed.
+
+Either way, unseen situations/arms and transferable facts are always taken on.
+
+## Self-training from live data (the idle round-trip)
+
+The workflows above build a pack from scratch on a dev box. The robot can also
+**refine its own accumulated learning** while it sits idle: seed a run from the
+robot's live data dir, let the sim sharpen the coach policy against harder
+virtual traps than the carpet offers, then import the result **back** with
+`--adopt`.
+
+`--seed-from <dir>` copies the robot's live files into the knowledge dir
+**before** the run, so the coach refines real experience instead of a blank
+slate:
+
+```bash
+# on the robot, while idle — layer_b/data is the robot's live data dir
+python3 run_training.py scenarios/*.json \
+    --knowledge-dir /tmp/selftrain --seed-from layer_b/data --speedf 4 --quiet
+# then, with Layer B stopped:
+python3 layer_b/import_training.py /tmp/selftrain --adopt
+```
+
+- **What gets seeded:** `coach_policy.json` (the one that matters — the coach
+  reads and refines it in place), plus `events.db` and `semantic.db` if present.
+  `spatial.db` is **never** seeded — place memories don't transfer. Files already
+  in the knowledge dir are **kept** so a resumed run builds on its progress;
+  `--seed-force` overwrites them. SQLite dbs are snapshotted through the backup
+  API, so seeding is safe even while Layer B is still writing.
+- **Lineage → `--adopt`:** the pack's manifest is stamped with a **lineage** id —
+  a fingerprint of the seed `coach_policy.json` (or `cold` when unseeded), stable
+  across re-runs of the same dir. On import, `import_training.py` compares it to
+  the robot's own policy; a match means "this is your own learning, refined,"
+  and it recommends `--adopt` so the shared seed isn't counted twice (an arm the
+  robot left at 7/1 and the sim sharpened to 10/2 imports back as 10/2, not 17/3).
+- **Killable instantly:** a `SIGTERM` to `run_training.py` tears the run down as
+  cleanly as `Ctrl-C` — module subprocesses terminated, sim and bus stopped —
+  and still distils whatever completed. So an idle-time trainer can be stopped
+  the moment the robot has real work to do.
+- **Isolation is unchanged:** training always talks to a private,
+  per-run `/tmp/picarx_train_<port>.sock` and an ephemeral bus port — never the
+  real `/tmp/picarx_safety.sock` or `localhost:1883`, so it can never drive the
+  physical robot or disturb a running safety daemon.
 
 ## Deployment Workflow
 
@@ -184,7 +235,9 @@ same UCB1 statistics.
    for the distilled intuitions, `coach_policy.json` for the learned arms.
 4. **Deploy to the robot**: copy `training_data/` over and, with Layer B stopped,
    `python3 layer_b/import_training.py training_data` (add `--dry-run` first to
-   preview). Restart the orchestrator; the bot begins physical operation with experience.
+   preview; add `--adopt` if the pack was seeded from this robot's own data —
+   the importer flags this when the lineage matches). Restart the orchestrator;
+   the bot begins physical operation with experience.
 5. **Collect real-world data** from physical exploration.
 6. **Merge learnings** — real operation keeps updating the same `coach_policy.json`
    and `semantic.db` the pack seeded.

@@ -42,6 +42,7 @@ Pure-Python and API-key-free: pattern mining reuses the robot's own
 pattern_miner unchanged, and the escape-tactic aggregation mirrors
 reflection.py's self-model logic. Nothing here needs the network or a model.
 """
+import hashlib
 import json
 import os
 import sys
@@ -102,6 +103,39 @@ def _write_json(path, obj):
         json.dump(obj, f, indent=2)
         f.write("\n")
     os.replace(tmp, path)
+
+
+# --------------------------------------------------------------------------
+# lineage: which robot policy this pack descends from
+# --------------------------------------------------------------------------
+
+def policy_lineage(policy):
+    """A short, stable fingerprint of a coach policy's learned situations/arms.
+
+    Kept byte-for-byte in step with the robot's import_training.policy_lineage:
+    canonical JSON of the non-reserved ('_'-excluded) situations, sha256, first
+    12 hex. Reserved sections (churny demonstration logs) are left out so the id
+    tracks learned behaviour, not bookkeeping. Empty/absent policy -> 'cold'.
+
+    Purpose: label a pack with the identity of the seed it was trained from, so
+    the importer can tell a self-training round-trip (pack seeded from THIS
+    robot -> wants --adopt) from an independently-trained pack (wants merge)."""
+    if not isinstance(policy, dict):
+        return "cold"
+    core = {k: v for k, v in policy.items() if not k.startswith("_")}
+    if not core:
+        return "cold"
+    blob = json.dumps(core, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:12]
+
+
+def seed_lineage(knowledge_dir):
+    """Lineage of the policy the knowledge dir was SEEDED with, read BEFORE
+    training refines it in place. 'cold' when the dir holds no coach_policy.json
+    yet (a from-scratch run). Call this at the START of a suite - once the coach
+    has run, coach_policy.json is the refined descendant, not the seed."""
+    policy = _load_json(os.path.join(knowledge_dir, "coach_policy.json"), None)
+    return policy_lineage(policy)
 
 
 # --------------------------------------------------------------------------
@@ -215,12 +249,19 @@ def _suite_totals(summaries):
 # the one entry point the launcher calls
 # --------------------------------------------------------------------------
 
-def consolidate(knowledge_dir, summaries=None, picarx_repo=None, verbose=True):
+def consolidate(knowledge_dir, summaries=None, picarx_repo=None, verbose=True,
+                lineage=None):
     """Distill the knowledge dir into navigation_facts.json + knowledge_pack.json.
 
     knowledge_dir : the accumulating dir holding coach_policy.json + events.db
     summaries     : the episode metrics dicts from the suite (for the manifest)
     picarx_repo   : robot repo root; auto-resolved if None
+    lineage       : the seed lineage captured BEFORE training refined the policy
+                    (see seed_lineage); the id of the robot policy this pack
+                    descends from. Stays stable across re-runs of the same dir
+                    (a previously-stamped lineage is preserved). When omitted
+                    (e.g. the standalone CLI, which can't see the seed), falls
+                    back to fingerprinting the policy the pack currently carries.
 
     Returns the manifest dict. Fail-soft: a missing input just yields an empty
     section rather than raising, so a keyless run (no coach arms) still emits a
@@ -232,6 +273,13 @@ def consolidate(knowledge_dir, summaries=None, picarx_repo=None, verbose=True):
     policy = _load_json(os.path.join(knowledge_dir, "coach_policy.json"), {})
     if not isinstance(policy, dict):
         policy = {}
+
+    # Lineage stays put once stamped (so re-running a dir doesn't drift it onto
+    # the now-refined policy); else the caller's captured seed; else best-effort
+    # from what the pack carries.
+    prior = _load_json(os.path.join(knowledge_dir, "knowledge_pack.json"), {})
+    lineage = ((prior.get("lineage") if isinstance(prior, dict) else None)
+               or lineage or policy_lineage(policy))
 
     events_db = os.path.join(knowledge_dir, "events.db")
     patterns = []
@@ -255,6 +303,7 @@ def consolidate(knowledge_dir, summaries=None, picarx_repo=None, verbose=True):
         "kind": "picarx-training-knowledge-pack",
         "created_at": time.time(),
         "created_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "lineage": lineage,
         "training": _suite_totals(summaries),
         "contents": {
             "coach_policy": policy_inventory(policy),
@@ -269,8 +318,13 @@ def consolidate(knowledge_dir, summaries=None, picarx_repo=None, verbose=True):
         print(f"  coach policy: {inv['situations']} situations, {inv['arms']} arms, "
               f"{inv['demonstrations']} demonstrations")
         print(f"  navigation:   {len(facts)} facts, {len(patterns)} patterns")
+        print(f"  lineage:      {lineage}"
+              + ("   (cold - not seeded from a robot)" if lineage == "cold"
+                 else "   (seeded from a robot's policy; import with --adopt "
+                      "on that same robot)"))
         print("  deploy it:    python3 layer_b/import_training.py "
-              f"{knowledge_dir}   (on the robot)")
+              f"{knowledge_dir}   (on the robot)"
+              + ("" if lineage == "cold" else " --adopt"))
     return manifest
 
 

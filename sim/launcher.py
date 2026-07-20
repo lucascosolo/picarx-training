@@ -37,6 +37,88 @@ MODULE_START_ORDER = ("arbiter", "event_logger", "coach", "explorer",
                       "location_graph", "goal_manager", "reflection",
                       "field_agent")   # field_agent last: everything ready first
 
+# The robot's live learning we can seed a training run from, so the sim
+# refines REAL experience instead of a blank slate. coach_policy.json is the
+# one that matters (the coach reads it via SIM_POLICY_DIR and refines it in
+# place); events.db seeds the end-of-suite pattern-mining corpus with real
+# history; semantic.db is carried for completeness. spatial.db is deliberately
+# NOT seeded - place memories don't transfer (the sim's rooms aren't the house).
+SEED_FILES = ("coach_policy.json", "events.db", "semantic.db")
+
+
+def _copy_seed_file(src, dst):
+    """Copy one seed file into place. A SQLite db (.db) is snapshotted through
+    the backup API - a consistent read even while Layer B is mid-write on the
+    robot, landing a standalone db with no -wal/-shm sidecar to carry along.
+    JSON is copied verbatim (coach.py writes coach_policy.json atomically, so a
+    plain copy can't tear). Fail-soft: if the snapshot can't run, fall back to a
+    byte copy rather than abort the whole seed."""
+    if dst.endswith(".db"):
+        try:
+            src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+            try:
+                dst_conn = sqlite3.connect(dst)
+                try:
+                    src_conn.backup(dst_conn)
+                finally:
+                    dst_conn.close()
+            finally:
+                src_conn.close()
+            return
+        except sqlite3.Error:
+            pass  # not a usable sqlite db (or locked) - fall back to a raw copy
+    shutil.copy2(src, dst)
+
+
+def seed_knowledge_dir(seed_from, knowledge_dir, force=False, verbose=True):
+    """Seed a training knowledge dir from the robot's live data BEFORE a run.
+
+    Copies each of SEED_FILES that exists in `seed_from` into `knowledge_dir`.
+    Idempotent by default: a file already present in `knowledge_dir` is KEPT
+    (so a resumed/repeated suite builds on its accumulated progress rather than
+    being reset to the seed each time); pass force=True to overwrite. Returns
+    the list of basenames actually (re)written.
+
+    Pure file-ops - no bus, no hardware, no subprocesses - so it's unit-testable
+    and safe to call on the robot with Layer B still running."""
+    seed_from = os.path.abspath(seed_from)
+    knowledge_dir = os.path.abspath(knowledge_dir)
+    if not os.path.isdir(seed_from):
+        raise SystemExit(f"--seed-from dir not found: {seed_from}")
+    if seed_from == knowledge_dir:
+        raise SystemExit("--seed-from and the knowledge dir are the same path")
+    os.makedirs(knowledge_dir, exist_ok=True)
+
+    copied, kept = [], []
+    for name in SEED_FILES:
+        src = os.path.join(seed_from, name)
+        dst = os.path.join(knowledge_dir, name)
+        if not os.path.exists(src):
+            continue
+        if os.path.exists(dst) and not force:
+            kept.append(name)
+            continue
+        if force:
+            # drop any stale sidecars so an overwritten db can't inherit a WAL
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.remove(dst + suffix)
+                except FileNotFoundError:
+                    pass
+        _copy_seed_file(src, dst)
+        copied.append(name)
+
+    if verbose:
+        if copied:
+            print(f"  seed: copied {', '.join(copied)} from {seed_from}")
+        if kept:
+            print(f"  seed: kept existing {', '.join(kept)} in knowledge dir "
+                  "(use --seed-force to overwrite)")
+        if not copied and not kept:
+            print(f"  seed: nothing to copy from {seed_from} "
+                  f"(none of {', '.join(SEED_FILES)} present)")
+    return copied
+
 
 
 

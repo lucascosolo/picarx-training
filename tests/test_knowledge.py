@@ -88,6 +88,54 @@ class InventoryAndTotalsTest(unittest.TestCase):
         self.assertEqual(t["goals_reached"], 1)
 
 
+class LineageTest(unittest.TestCase):
+    """The pack records which robot policy it descends from, so the importer can
+    tell a self-training round-trip (wants --adopt) from an independent pack."""
+
+    def test_unseeded_policy_is_cold(self):
+        self.assertEqual(knowledge.policy_lineage({}), "cold")
+        self.assertEqual(knowledge.policy_lineage({"_demonstrations": [{}]}), "cold")
+        self.assertEqual(knowledge.policy_lineage(None), "cold")
+
+    def test_seeded_policy_hash_stable_and_reserved_agnostic(self):
+        policy = _policy(("k", [_arm("backward", 7, 1)]))
+        lin = knowledge.policy_lineage(policy)
+        self.assertNotEqual(lin, "cold")
+        self.assertEqual(lin, knowledge.policy_lineage(policy))        # deterministic
+        policy["_demonstrations"] = [{"ts": 1, "steps": []}]
+        self.assertEqual(lin, knowledge.policy_lineage(policy))        # reserved ignored
+
+    def test_seed_lineage_reads_dir_before_refinement(self):
+        d = tempfile.mkdtemp()
+        self.assertEqual(knowledge.seed_lineage(d), "cold")           # nothing seeded yet
+        policy = _policy(("k", [_arm("backward", 7, 1)]))
+        with open(os.path.join(d, "coach_policy.json"), "w") as f:
+            json.dump(policy, f)
+        self.assertEqual(knowledge.seed_lineage(d), knowledge.policy_lineage(policy))
+
+    def test_manifest_stamps_seed_and_preserves_it_across_reruns(self):
+        d = tempfile.mkdtemp()
+        seed = _policy(("k", [_arm("backward", 7, 1)]))
+        with open(os.path.join(d, "coach_policy.json"), "w") as f:
+            json.dump(seed, f)
+        lin = knowledge.seed_lineage(d)
+        m1 = knowledge.consolidate(d, lineage=lin, verbose=False)
+        self.assertEqual(m1["lineage"], lin)
+        # the sim refines coach_policy.json in place; a later consolidation must
+        # keep the ORIGINAL seed lineage, not drift onto the refined descendant
+        refined = _policy(("k", [_arm("backward", 10, 2)]))
+        with open(os.path.join(d, "coach_policy.json"), "w") as f:
+            json.dump(refined, f)
+        self.assertNotEqual(knowledge.seed_lineage(d), lin)           # dir now refined
+        m2 = knowledge.consolidate(d, lineage=knowledge.seed_lineage(d), verbose=False)
+        self.assertEqual(m2["lineage"], lin)                          # preserved
+
+    def test_cold_run_labelled_cold(self):
+        d = tempfile.mkdtemp()
+        m = knowledge.consolidate(d, lineage=knowledge.seed_lineage(d), verbose=False)
+        self.assertEqual(m["lineage"], "cold")
+
+
 class ConsolidateEndToEndTest(unittest.TestCase):
     """The full path: a knowledge dir with a coach policy + accumulated
     events.db in, a navigation pack + manifest out."""
