@@ -52,6 +52,7 @@ class SensorSynthesizer:
         self.last_heard = {"text": None, "updated_at": None}
         self.last_action = {"source": None, "action": None,
                             "result": None, "updated_at": None}
+        self._prev_collision_events = 0   # to edge-detect a new collision (impact)
 
     # Wire these to bus subscriptions so the snapshot mirrors
     # last_heard / last_action exactly like world_state does.
@@ -148,9 +149,39 @@ class SensorSynthesizer:
                 "stale": False,
             },
             "battery": {**battery, "updated_at": now, "stale": False},
+            "imu": self._imu_payload(now),
             "last_heard": {**self.last_heard,
                            "stale": self._stale(self.last_heard["updated_at"], 15.0)},
             "last_action": dict(self.last_action),
+        }
+
+    def _imu_payload(self, now):
+        """Synthetic head-frame IMU block, matching the real world_state.py imu
+        shape so field_agent's IMU consumer works in the sim too. moving/rotation
+        come from the true body motion; a NEW collision this window is the impact
+        (the jolt a real accelerometer feels when it hits something the ranged
+        sensors missed). Head-mounted, so head_pose rides along. Flat sim floor
+        -> never tilted."""
+        r = self.world.robot
+        events = getattr(self.world, "collision_events", 0)
+        impact = events > self._prev_collision_events
+        self._prev_collision_events = events
+        yaw_dps = math.degrees(r.actual_yaw_rate)
+        moving = abs(r.actual_speed_cm_s) > 1.0 or abs(yaw_dps) > 3.0
+        return {
+            "moving": bool(moving),
+            "impact": bool(impact),
+            "tilted": False,
+            "rotation_rate_dps": round(abs(yaw_dps), 2),
+            "tilt_from_rest_deg": 0.0,
+            "body_tilt_deg": 0.0,
+            "accel": {"x": 0.0, "y": 0.0, "z": 9.807},
+            "gyro": {"x": 0.0, "y": 0.0, "z": round(yaw_dps, 2)},
+            "temperature_c": 30.0,
+            "head_pose": {"pan": r.cam_pan_deg, "tilt": r.cam_tilt_deg},
+            "calibrated": True,
+            "updated_at": now,
+            "stale": False,
         }
 
     # ---------- derived signals ----------
