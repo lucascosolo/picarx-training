@@ -86,7 +86,12 @@ def seed_knowledge_dir(seed_from, knowledge_dir, force=False, verbose=True):
     if not os.path.isdir(seed_from):
         raise SystemExit(f"--seed-from dir not found: {seed_from}")
     if seed_from == knowledge_dir:
-        raise SystemExit("--seed-from and the knowledge dir are the same path")
+        # The dir is already its own seed - the on-robot self_trainer copies
+        # live data INTO the knowledge dir and then passes it as --seed-from
+        # too. Nothing to copy, and force must never delete the only copy.
+        if verbose:
+            print("  seed: knowledge dir is its own seed - nothing to copy")
+        return []
     os.makedirs(knowledge_dir, exist_ok=True)
 
     copied, kept = [], []
